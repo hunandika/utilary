@@ -67,7 +67,7 @@ export class RedLock {
     this.retryDelay = opts.retryDelay ?? 200
     this.retryJitter = opts.retryJitter ?? 200
     this.driftFactor = opts.driftFactor ?? 0.01
-    this.automaticExtensionThreshold = opts.automaticExtensionThreshold ?? 500
+    this.automaticExtensionThreshold = opts.automaticExtensionThreshold ?? 100
     this.onError = opts.onError
   }
 
@@ -221,6 +221,99 @@ export class RedLock {
   }
 
   /**
+   * Schedules automatic lock extension for long-running operations.
+   *
+   * @param lock - Lock object to extend
+   * @param ttl - Lock time-to-live in milliseconds
+   * @param isReleased - Reference to track lock release status
+   * @param fn - Function to execute with lock protection
+   * @param maxExtensions - Maximum number of allowed extensions
+   * @param threshold - Threshold for extension in milliseconds
+   * @returns Promise resolving to the function's return value
+   */
+  private scheduleExtend<T>(
+    lock: Lock,
+    ttl: number,
+    isReleased: { value: boolean },
+    fn: () => Promise<T>,
+    maxExtensions?: number,
+    threshold: number = this.automaticExtensionThreshold
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      let extensionCount = 0
+
+      const extend = (): Promise<void> => {
+        return new Promise((extendResolve, extendReject) => {
+          if (isReleased.value) return extendResolve()
+
+          const timeLeft = lock.validUntil - Date.now()
+          if (timeLeft < threshold) {
+            // Check extension limit
+            if (
+              maxExtensions !== undefined &&
+              maxExtensions >= 0 &&
+              extensionCount >= maxExtensions
+            ) {
+              // Reached max extensions, reject with error
+              return extendReject(
+                new RedLockExtendError(
+                  `Reached maximum number of extensions: ${maxExtensions} ${ttl}`,
+                  lock.key
+                )
+              )
+            }
+
+            this.extend(lock, ttl)
+              .then(extended => {
+                if (!extended) {
+                  return extendReject(new RedLockExtendError(`Failed to extend lock`, lock.key))
+                }
+                extensionCount++
+
+                const nextExtend = lock.validUntil - Date.now() - threshold
+                setTimeout(
+                  () => {
+                    extend().then(extendResolve).catch(extendReject)
+                  },
+                  Math.max(nextExtend, 0)
+                )
+              })
+              .catch(err => {
+                extendReject(this.createError(this.ensureError(err), RedLockExtendError, lock.key))
+              })
+          } else {
+            const nextExtend = lock.validUntil - Date.now() - threshold
+            setTimeout(
+              () => {
+                extend().then(extendResolve).catch(extendReject)
+              },
+              Math.max(nextExtend, 0)
+            )
+          }
+        })
+      }
+
+      // Start the extension process
+      extend().catch(error => {
+        if (!isReleased.value) {
+          reject(error)
+        }
+      })
+
+      // Execute the function while the lock is being extended
+      fn()
+        .then(result => {
+          isReleased.value = true
+          resolve(result)
+        })
+        .catch(error => {
+          isReleased.value = true
+          reject(error)
+        })
+    })
+  }
+
+  /**
    * Executes a function with automatic lock extension for long-running operations.
    *
    * Monitors lock validity and automatically extends when approaching expiration.
@@ -242,39 +335,14 @@ export class RedLock {
     const lock = await this.acquire(key, ttl)
     if (!lock) throw new Error('Failed to acquire lock')
 
-    let isReleased = false
-    let extensionCount = 0
+    const isReleased = { value: false }
     const maxExtensions = options?.maxExtensions
     const threshold = options?.extensionThreshold ?? this.automaticExtensionThreshold
 
-    const scheduleExtend = async (): Promise<void> => {
-      if (isReleased) return
-
-      const timeLeft = lock.validUntil - Date.now()
-      if (timeLeft < threshold) {
-        // Check extension limit
-        if (maxExtensions !== undefined && maxExtensions >= 0 && extensionCount >= maxExtensions) {
-          // Reached max extensions, stop extending
-          return
-        }
-
-        const extended = await this.extend(lock, ttl)
-        if (!extended) {
-          return
-        }
-        extensionCount++
-      }
-
-      const nextExtend = lock.validUntil - Date.now() - threshold
-      setTimeout(scheduleExtend, Math.max(nextExtend, 0))
-    }
-
-    scheduleExtend()
-
     try {
-      return await fn()
+      return await this.scheduleExtend(lock, ttl, isReleased, fn, maxExtensions, threshold)
     } finally {
-      isReleased = true
+      isReleased.value = true
       await this.release(lock)
     }
   }

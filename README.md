@@ -259,7 +259,7 @@ await redlock.autoExtendLock('financial-calc', 3000, async () => {
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `maxExtensions` | `number` | `undefined` | Maximum extensions allowed (`-1` = unlimited, `0` = none, `>0` = limit) |
-| `extensionThreshold` | `number` | `500` | Time remaining (ms) when extension is triggered |
+| `extensionThreshold` | `number` | `100` | Time remaining (ms) when extension is triggered |
 
 ### Common Patterns
 
@@ -293,6 +293,141 @@ await redlock.autoExtendLock('critical', 4000, criticalFn, {
 
 ## Best Practices
 
+### Thread Safety & Error Handling
+
+**⚠️ CRITICAL: Always wrap RedLock operations in try-catch blocks** to ensure proper thread handling when locks fail or expire.
+
+```typescript
+// ✅ CORRECT: Proper error handling with cleanup
+async function processWithLock(userId: string) {
+  let transaction = null
+  let timer = null
+
+  try {
+    // Start transaction
+    transaction = await db.beginTransaction()
+
+    // Set operation timeout
+    timer = setTimeout(() => {
+      throw new Error('Operation timeout')
+    }, 30000)
+
+    await redlock.lock(`user-${userId}`, 5000, async () => {
+      await updateUserData(userId, transaction)
+      await transaction.commit()
+    })
+
+  } catch (error) {
+    // Handle lock failures, timeouts, or operation errors
+    if (transaction) {
+      await transaction.rollback()
+      console.log('Transaction rolled back due to error')
+    }
+
+    if (error instanceof LockTimeoutError) {
+      console.error('Lock operation timed out:', error.message)
+      // Handle timeout-specific cleanup
+    } else if (error instanceof LockAcquisitionError) {
+      console.error('Failed to acquire lock:', error.message)
+      // Handle acquisition failure
+    } else {
+      console.error('Unexpected error:', error.message)
+    }
+
+    throw error // Re-throw if needed
+  } finally {
+    // Always cleanup resources
+    if (timer) {
+      clearTimeout(timer)
+    }
+
+    // Close connections, cleanup resources, etc.
+    await cleanupResources()
+  }
+}
+
+// ❌ INCORRECT: No error handling - can cause resource leaks
+async function unsafeProcess(userId: string) {
+  const transaction = await db.beginTransaction()
+
+  await redlock.lock(`user-${userId}`, 5000, async () => {
+    await updateUserData(userId, transaction)
+    await transaction.commit()
+  })
+  // If lock fails, transaction is never rolled back!
+}
+```
+
+### Essential Thread Safety Patterns
+
+1. **Database Transactions**
+   ```typescript
+   const transaction = await db.beginTransaction()
+   try {
+     await redlock.lock('resource', 3000, async () => {
+       await performDatabaseOperations(transaction)
+       await transaction.commit()
+     })
+   } catch (error) {
+     await transaction.rollback()
+     throw error
+   }
+   ```
+
+2. **Timeout Management**
+   ```typescript
+   const timer = setTimeout(() => controller.abort(), 30000)
+   try {
+     await redlock.lock('resource', 5000, async () => {
+       await operationWithAbortSignal(controller.signal)
+     })
+   } finally {
+     clearTimeout(timer)
+   }
+   ```
+
+3. **Resource Cleanup**
+   ```typescript
+   let fileHandle = null
+   try {
+     fileHandle = await openFile('data.txt')
+     await redlock.lock('file-processing', 3000, async () => {
+       await processFile(fileHandle)
+     })
+   } catch (error) {
+     // Handle errors appropriately
+     await handleProcessingError(error)
+   } finally {
+     if (fileHandle) {
+       await fileHandle.close()
+     }
+   }
+   ```
+
+### Lock-Specific Error Handling
+
+```typescript
+try {
+  await redlock.autoExtendLock('critical-operation', 2000, async () => {
+    await performCriticalTask()
+  }, { maxExtensions: 3 })
+} catch (error) {
+  if (error instanceof LockTimeoutError) {
+    // Operation exceeded maximum time (initial TTL + extensions)
+    await rollbackOperations()
+    await notifyTimeout()
+  } else if (error instanceof LockAcquisitionError) {
+    // Could not acquire lock after retries
+    await handleAcquisitionFailure()
+    await scheduleRetry()
+  } else if (error instanceof LockExtensionError) {
+    // Lock extension failed (Redis connection issues, etc.)
+    await handleExtensionFailure()
+    await emergencyCleanup()
+  }
+}
+```
+
 1. **Lock Duration & Extension Strategy**
    - Set appropriate initial TTL based on expected operation time
    - Use `maxExtensions` to control resource usage:
@@ -311,12 +446,16 @@ await redlock.autoExtendLock('critical', 4000, criticalFn, {
    - Set `extensionThreshold` based on operation criticality:
      - High-priority: 1000ms+ (extend early)
      - Normal operations: 500ms (default)
-     - Quick tasks: 200ms (minimal extension window)
+     - Quick tasks: 100-200ms (minimal extension window)
    - Monitor extension patterns to optimize thresholds
 
-4. **Error Handling**
+4. **Error Handling & Thread Safety**
+   - **ALWAYS** wrap RedLock operations in try-catch blocks
    - Implement comprehensive error catching for all lock operations
-   - Use proper cleanup in finally blocks
+   - Use proper cleanup in finally blocks for transactions, timers, and resources
+   - Handle different error types appropriately (timeout, acquisition, extension failures)
+   - Ensure database transactions are rolled back on lock failures
+   - Clear timeouts and cleanup resources in finally blocks
    - Monitor and log lock failures, especially extension failures
    - Handle max extension limits gracefully
 
