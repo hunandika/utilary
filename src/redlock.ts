@@ -2,6 +2,7 @@ import { RedisClientType } from 'redis'
 import {
   Lock,
   RedLockOptions,
+  AutoExtendLockOptions,
   RedLockError,
   RedLockAcquisitionError,
   RedLockReleaseError,
@@ -228,27 +229,43 @@ export class RedLock {
    * @param key - Unique identifier for the resource to lock
    * @param ttl - Initial lock time-to-live in milliseconds
    * @param fn - Function to execute with lock protection
+   * @param options - Optional configuration for auto-extension behavior
    * @returns Promise resolving to the function's return value
-   * @throws Error if lock acquisition fails
+   * @throws Error if lock acquisition fails or max extensions reached
    */
-  async autoExtendLock<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T> {
+  async autoExtendLock<T>(
+    key: string,
+    ttl: number,
+    fn: () => Promise<T>,
+    options?: AutoExtendLockOptions
+  ): Promise<T> {
     const lock = await this.acquire(key, ttl)
     if (!lock) throw new Error('Failed to acquire lock')
 
     let isReleased = false
+    let extensionCount = 0
+    const maxExtensions = options?.maxExtensions
+    const threshold = options?.extensionThreshold ?? this.automaticExtensionThreshold
 
     const scheduleExtend = async (): Promise<void> => {
       if (isReleased) return
 
       const timeLeft = lock.validUntil - Date.now()
-      if (timeLeft < this.automaticExtensionThreshold) {
+      if (timeLeft < threshold) {
+        // Check extension limit
+        if (maxExtensions !== undefined && maxExtensions >= 0 && extensionCount >= maxExtensions) {
+          // Reached max extensions, stop extending
+          return
+        }
+
         const extended = await this.extend(lock, ttl)
         if (!extended) {
           return
         }
+        extensionCount++
       }
 
-      const nextExtend = lock.validUntil - Date.now() - this.automaticExtensionThreshold
+      const nextExtend = lock.validUntil - Date.now() - threshold
       setTimeout(scheduleExtend, Math.max(nextExtend, 0))
     }
 

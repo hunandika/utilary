@@ -2,26 +2,20 @@
 
 [![CI/CD](https://github.com/hunandika/utilary/actions/workflows/ci.yml/badge.svg)](https://github.com/hunandika/utilary/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/hunandika/utilary/graph/badge.svg?token=wnXFspz8uF)](https://codecov.io/gh/hunandika/utilary)
-[![Codacy Badge](https://app.codacy.com/project/badge/Grade/5ed76402b02742268940210ee39b5a04)](https://app.codacy.com/gh/hunandika/utilary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 [![CodeFactor](https://www.codefactor.io/repository/github/hunandika/utilary/badge?s=1a152b71a37c619f0ee1d6ffd0847cf40ac6e37c)](https://www.codefactor.io/repository/github/hunandika/utilary)
 [![Known Vulnerabilities](https://snyk.io/test/github/hunandika/utilary/badge.svg)](https://snyk.io/test/github/hunandika/utilary)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
 
-A comprehensive TypeScript utility library designed for scalable applications. Currently featuring robust Redis distributed locking functionality with plans for expanded data management utilities.
-
-## Overview
-
-Utilary provides enterprise-grade utilities for modern applications requiring reliable concurrency control and distributed system management. The library implements industry-standard algorithms like RedLock for distributed locking across Redis instances.
+A comprehensive TypeScript utility library featuring Redis distributed locking and more. Designed for scalable applications requiring reliable concurrency control and data management utilities.
 
 ## Features
 
 - 🔒 **Distributed Locking**: Redis-based distributed locks with RedLock algorithm
-- 🔄 **Automatic Extension**: Smart lock extension for long-running operations
-- ⚡ **Timeout Management**: Configurable timeouts with graceful error handling
-- 🚀 **TypeScript First**: Full type safety with comprehensive type definitions
-- 🎯 **Error Resilience**: Advanced error handling with customizable callbacks
-- 📦 **Zero Dependencies**: Lightweight with minimal external dependencies
-- 🏢 **Enterprise Ready**: Production-tested for scalable applications
+- 🔄 **Auto-Retry & Extension**: Smart retry mechanism and lock extension for long operations
+- ⚡ **Timeout Management**: Sophisticated timeout handling with automatic error recovery
+- 🛡️ **Error Resilience**: Comprehensive error handling with customizable callbacks
+- 🚀 **High Performance**: Optimized for high-concurrency environments
+- 📦 **TypeScript First**: Full type safety with zero external dependencies
 
 ## Installation
 
@@ -41,164 +35,305 @@ const client = createClient({
 })
 await client.connect()
 
-// Create RedLock instance
+// Create RedLock instance with advanced configuration
 const redlock = new RedLock(client, {
-  retryCount: 10,
-  retryDelay: 200,
-  retryJitter: 200,
-})
-
-// Execute critical section with automatic lock management
-await redlock.lock('critical-resource', 5000, async () => {
-  console.log('Executing critical section...')
-  await performCriticalOperation()
-  console.log('Critical section completed safely')
+  retryCount: 5,        // Maximum retry attempts
+  retryDelay: 100,      // Base delay between retries (ms)
+  retryJitter: 50,      // Random delay variation
+  driftFactor: 0.01,    // Clock drift compensation
+  automaticExtensionThreshold: 500,  // Auto-extension threshold
+  onError: error => {
+    console.error('🚨 RedLock operation failed:', error.message)
+  },
 })
 ```
 
-## API Documentation
+📚 **[View Complete Examples →](https://github.com/hunandika/utilary/blob/main/examples/basic-usage.ts)**
 
-### Configuration Options
+## Core Features
+
+### 1. Automatic Lock Management
 
 ```typescript
-interface RedLockOptions {
-  retryCount?: number // Retry attempts for lock acquisition (default: 10)
-  retryDelay?: number // Base retry delay in milliseconds (default: 200)
-  retryJitter?: number // Random jitter for retry timing (default: 200)
-  driftFactor?: number // Clock drift compensation factor (default: 0.01)
-  automaticExtensionThreshold?: number // Auto-extension threshold in ms (default: 500)
-  onError?: (error: Error) => void // Custom error handler callback
-}
+// Simple operations with automatic lock handling
+await redlock.lock('payment-processing', 3000, async () => {
+  await processPayment()
+  // Lock is automatically released after completion
+})
 ```
 
-### Core Methods
-
-#### `acquire(key: string, ttl: number): Promise<Lock | null>`
-
-Acquire a distributed lock for the specified resource.
+### 2. Auto-Extending Locks with Smart Limits
 
 ```typescript
-const lock = await redlock.acquire('payment-processing', 5000)
+// Long-running operations with controlled extensions
+await redlock.autoExtendLock('report-generation', 2000, async () => {
+  await generateLargeReport()
+  // Lock automatically extends up to 5 times
+}, { maxExtensions: 5 })
+
+// Payment processing with strict limit
+await redlock.autoExtendLock('payment-critical', 1500, async () => {
+  await processPayment()
+  // Only 1 extension allowed for predictable timing
+}, { maxExtensions: 1 })
+
+// Background sync with unlimited extensions
+await redlock.autoExtendLock('data-sync', 3000, async () => {
+  await syncLargeDataset()
+  // Unlimited extensions for unpredictable operations
+}, { maxExtensions: -1 })
+
+// Custom extension threshold for early triggers
+await redlock.autoExtendLock('custom-operation', 2000, async () => {
+  await performOperation()
+  // Extend when 1000ms left instead of default 500ms
+}, {
+  maxExtensions: 3,
+  extensionThreshold: 1000
+})
+```
+
+### 3. Manual Lock Control
+
+```typescript
+// Fine-grained control over lock lifecycle
+const lock = await redlock.acquire('user-data', 5000)
 if (lock) {
   try {
-    // Perform locked operations
-    await processPayment()
+    await performOperation()
+    await redlock.extend(lock, 3000)  // Extend if needed
+    await continueOperation()
   } finally {
     await redlock.release(lock)
   }
 }
 ```
 
-#### `release(lock: Lock): Promise<boolean>`
+## Advanced Features
 
-Release a previously acquired lock.
+### Smart Extension Management
+
+RedLock provides intelligent extension control with flexible configuration:
+
+#### Extension Policies
+
+1. **Unlimited Extensions** (default behavior)
+   ```typescript
+   await redlock.autoExtendLock('operation', 2000, fn) // No options = unlimited
+   await redlock.autoExtendLock('operation', 2000, fn, { maxExtensions: -1 })
+   ```
+
+2. **Limited Extensions**
+   ```typescript
+   await redlock.autoExtendLock('payment', 3000, fn, { maxExtensions: 2 })
+   // Will extend maximum 2 times, then let TTL expire naturally
+   ```
+
+3. **No Extensions**
+   ```typescript
+   await redlock.autoExtendLock('quick-task', 1000, fn, { maxExtensions: 0 })
+   // Behaves like regular lock() with fixed TTL
+   ```
+
+#### Custom Extension Thresholds
+
+Control when extensions are triggered:
 
 ```typescript
-const released = await redlock.release(lock)
-console.log(`Lock released: ${released}`)
+await redlock.autoExtendLock('operation', 5000, fn, {
+  maxExtensions: 3,
+  extensionThreshold: 1500  // Extend when 1500ms left (vs default 500ms)
+})
 ```
 
-#### `extend(lock: Lock, ttl: number): Promise<boolean>`
+#### Use Case Recommendations
 
-Extend the duration of an active lock.
+- **Payment Processing**: `maxExtensions: 1-2` (predictable timing)
+- **Data Migration**: `maxExtensions: 5-10` (reasonable safety margin)
+- **Background Jobs**: `maxExtensions: -1` (unlimited for reliability)
+- **Critical Operations**: `maxExtensions: 0` (strict time bounds)
+
+### Smart Retry System
+
+RedLock implements an intelligent retry mechanism with:
+
+1. **Exponential Backoff**
+   - Increasing delays between retries
+   - Prevents system overload
+   - Example: 100ms → 200ms → 400ms → 800ms
+
+2. **Random Jitter**
+   - Prevents thundering herd problem
+   - Improves concurrent operation handling
+   - Reduces network congestion
+
+### Error Handling & Timeouts
 
 ```typescript
-const extended = await redlock.extend(lock, 5000)
-if (extended) {
-  console.log('Lock extended successfully')
+try {
+  await redlock.lock('critical-operation', 2000, async () => {
+    await criticalTask()
+  })
+} catch (error) {
+  if (error instanceof LockTimeoutError) {
+    // Handle timeout - operation exceeded duration
+    await handleTimeout()
+  } else if (error instanceof LockAcquisitionError) {
+    // Handle acquisition failure - retries exhausted
+    await handleAcquisitionFailure()
+  }
 }
 ```
 
-#### `lock<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T>`
-
-Execute a function with automatic lock lifecycle management.
-
-```typescript
-const result = await redlock.lock('user-update', 3000, async () => {
-  const user = await database.getUser(userId)
-  user.lastLogin = new Date()
-  await database.saveUser(user)
-  return user
-})
-```
-
-#### `autoExtendLock<T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T>`
-
-Execute long-running operations with intelligent lock extension.
-
-```typescript
-const report = await redlock.autoExtendLock('report-generation', 5000, async () => {
-  // Long-running operation - lock automatically extends as needed
-  return await generateComplexReport()
-})
-```
-
-## Advanced Usage
-
-### Error Handling Strategy
-
-Implement comprehensive error handling for production environments:
+### Production Monitoring
 
 ```typescript
 const redlock = new RedLock(client, {
-  retryCount: 15,
-  retryDelay: 100,
-  retryJitter: 50,
-  onError: error => {
-    logger.error('Distributed lock error', {
-      error: error.message,
-      timestamp: new Date().toISOString(),
-      service: 'utilary-redlock',
-    })
-
-    // Integration with monitoring systems
-    metrics.incrementCounter('redlock.errors')
-  },
+  onError: (error) => {
+    if (error instanceof LockTimeoutError) {
+      metrics.increment('lock.timeouts')
+      logger.warn('Lock timeout', {
+        resource: error.resource,
+        duration: error.duration
+      })
+    }
+  }
 })
 ```
 
-### Concurrent Operations
+## Real-World Examples
 
-Handle multiple lock operations efficiently:
+> 💡 **Want more examples?** Check out our [complete example collection](https://github.com/hunandika/utilary/blob/main/examples/basic-usage.ts) with detailed use cases and advanced patterns.
+
+### High-Concurrency Payment Processing
 
 ```typescript
-// Process multiple resources concurrently
-const results = await Promise.allSettled([
-  redlock.lock('resource-1', 5000, () => processResource1()),
-  redlock.lock('resource-2', 5000, () => processResource2()),
-  redlock.lock('resource-3', 5000, () => processResource3()),
-])
+async function processPaymentWithRetry(userId: string, amount: number) {
+  const LOCK_DURATION = 5000
+  const MAX_RETRIES = 3
 
-results.forEach((result, index) => {
-  if (result.status === 'fulfilled') {
-    console.log(`Resource ${index + 1} processed successfully`)
-  } else {
-    console.error(`Resource ${index + 1} failed:`, result.reason)
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await redlock.lock(`payment-${userId}`, LOCK_DURATION, async () => {
+        await validateBalance(userId)
+        await deductAmount(userId, amount)
+        await createTransaction(userId, amount)
+      })
+      return true
+    } catch (error) {
+      if (error instanceof LockTimeoutError) {
+        if (attempt === MAX_RETRIES) throw error
+        await delay(1000 * attempt)  // Exponential backoff
+      } else {
+        throw error
+      }
+    }
   }
+}
+```
+
+### Distributed Data Updates with Extension Control
+
+```typescript
+// Data migration with reasonable extension limits
+await redlock.autoExtendLock('user-migration', 2000, async () => {
+  const userData = await fetchUserData()
+  await processLargeDataset(userData)
+  await saveUpdatedData(userData)
+}, { maxExtensions: 10 }) // Allow up to 10 extensions for large operations
+
+// Critical financial operations with strict control
+await redlock.autoExtendLock('financial-calc', 3000, async () => {
+  await performComplexCalculation()
+  await updateAccountBalances()
+}, {
+  maxExtensions: 2,        // Maximum 2 extensions
+  extensionThreshold: 800  // Extend early for safety
+})
+```
+
+## Quick Reference
+
+### autoExtendLock() Options
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `maxExtensions` | `number` | `undefined` | Maximum extensions allowed (`-1` = unlimited, `0` = none, `>0` = limit) |
+| `extensionThreshold` | `number` | `500` | Time remaining (ms) when extension is triggered |
+
+### Common Patterns
+
+```typescript
+// 💳 Payment processing (predictable timing)
+await redlock.autoExtendLock('payment', 3000, paymentFn, {
+  maxExtensions: 1
+})
+
+// 📊 Data processing (reasonable safety)
+await redlock.autoExtendLock('analytics', 5000, analyticsFn, {
+  maxExtensions: 5
+})
+
+// 🔄 Background sync (maximum reliability)
+await redlock.autoExtendLock('sync', 2000, syncFn, {
+  maxExtensions: -1
+})
+
+// ⚡ Quick operations (no extensions)
+await redlock.autoExtendLock('cache-refresh', 1000, cacheFn, {
+  maxExtensions: 0
+})
+
+// 🎯 Custom threshold (extend early)
+await redlock.autoExtendLock('critical', 4000, criticalFn, {
+  maxExtensions: 2,
+  extensionThreshold: 1500  // Extend when 1.5s left
 })
 ```
 
 ## Best Practices
 
-1. **Lock Duration**: Set appropriate TTL values based on operation duration
-2. **Error Handling**: Always implement comprehensive error handling
-3. **Resource Naming**: Use descriptive, hierarchical lock keys
-4. **Monitoring**: Track lock acquisition patterns and failures
-5. **Testing**: Test lock behavior under various failure scenarios
+1. **Lock Duration & Extension Strategy**
+   - Set appropriate initial TTL based on expected operation time
+   - Use `maxExtensions` to control resource usage:
+     - **Critical/Financial**: `maxExtensions: 1-2` for predictable timing
+     - **Data Processing**: `maxExtensions: 5-10` for reasonable safety
+     - **Background Tasks**: `maxExtensions: -1` for maximum reliability
+   - Prefer shorter TTL with extensions over very long initial TTL
+   - Include buffer for network latency
 
-## Roadmap
+2. **Resource Keys**
+   - Use descriptive, hierarchical keys
+   - Include relevant identifiers (user ID, transaction ID, etc.)
+   - Consider environment prefixes (`prod:payment:`, `dev:sync:`)
 
-Utilary is actively developed with planned expansions:
+3. **Extension Configuration**
+   - Set `extensionThreshold` based on operation criticality:
+     - High-priority: 1000ms+ (extend early)
+     - Normal operations: 500ms (default)
+     - Quick tasks: 200ms (minimal extension window)
+   - Monitor extension patterns to optimize thresholds
 
-- **Cache Management**: Advanced caching utilities and strategies
-- **Rate Limiting**: Distributed rate limiting with multiple algorithms
-- **Data Validation**: Enterprise-grade validation utilities
-- **Event Processing**: Utilities for event-driven architectures
-- **Monitoring Integration**: Built-in metrics and observability tools
+4. **Error Handling**
+   - Implement comprehensive error catching for all lock operations
+   - Use proper cleanup in finally blocks
+   - Monitor and log lock failures, especially extension failures
+   - Handle max extension limits gracefully
+
+5. **Performance**
+   - Keep lock durations minimal while allowing for extensions
+   - Release locks as soon as possible
+   - Use appropriate retry configurations
+   - Monitor extension frequency to detect performance issues
 
 ## Contributing
 
-We welcome contributions to expand Utilary's capabilities. Please read our contribution guidelines and submit pull requests for review.
+We welcome contributions! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### 💡 Feature Requests & Bug Reports
+
+- **Request Features**: [Open an issue on GitHub](https://github.com/hunandika/utilary/issues/new?assignees=&labels=enhancement&template=feature_request.md&title=)
+- **Report Bugs**: [Submit a bug report](https://github.com/hunandika/utilary/issues/new?assignees=&labels=bug&template=bug_report.md&title=)
 
 ## License
 
@@ -207,7 +342,5 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 ## Author
 
 Developed by **Hunandika** - Building reliable utilities for modern applications.
-
----
 
 _Utilary: Where utility meets reliability_

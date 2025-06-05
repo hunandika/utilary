@@ -1,7 +1,7 @@
 /**
  * Represents an active distributed lock with ownership information.
  */
-export type Lock = {
+export interface Lock {
   /** Unique identifier for the locked resource */
   key: string
   /** Unique value for lock ownership verification */
@@ -13,7 +13,7 @@ export type Lock = {
 /**
  * Configuration options for RedLock behavior and retry strategies.
  */
-export type RedLockOptions = {
+export interface RedLockOptions {
   /** Maximum number of retry attempts for lock acquisition (default: 10) */
   retryCount?: number
   /** Base delay between retry attempts in milliseconds (default: 200) */
@@ -26,6 +26,26 @@ export type RedLockOptions = {
   automaticExtensionThreshold?: number
   /** Optional callback for handling lock operation errors */
   onError?: (error: RedLockError) => void
+}
+
+/**
+ * Configuration options for auto-extending lock behavior.
+ */
+export interface AutoExtendLockOptions {
+  /**
+   * Maximum number of extensions allowed.
+   * - `undefined` or omitted: unlimited extensions (default behavior)
+   * - `-1`: unlimited extensions (explicit)
+   * - `0`: no extensions allowed
+   * - `>0`: maximum number of extensions
+   */
+  maxExtensions?: number
+  /**
+   * Time remaining (in milliseconds) when extension should be triggered.
+   * Overrides the global automaticExtensionThreshold for this operation.
+   * Default: uses RedLock instance's automaticExtensionThreshold (500ms)
+   */
+  extensionThreshold?: number
 }
 
 /**
