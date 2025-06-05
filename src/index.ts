@@ -13,6 +13,7 @@
 export {
   Lock,
   RedLockOptions,
+  AutoExtendLockOptions,
   RedLockError,
   RedLockAcquisitionError,
   RedLockReleaseError,

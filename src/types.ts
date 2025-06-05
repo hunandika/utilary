@@ -29,6 +29,26 @@ export type RedLockOptions = {
 }
 
 /**
+ * Configuration options for auto-extending lock behavior.
+ */
+export type AutoExtendLockOptions = {
+  /**
+   * Maximum number of extensions allowed.
+   * - `undefined` or omitted: unlimited extensions (default behavior)
+   * - `-1`: unlimited extensions (explicit)
+   * - `0`: no extensions allowed
+   * - `>0`: maximum number of extensions
+   */
+  maxExtensions?: number
+  /**
+   * Time remaining (in milliseconds) when extension should be triggered.
+   * Overrides the global automaticExtensionThreshold for this operation.
+   * Default: uses RedLock instance's automaticExtensionThreshold (500ms)
+   */
+  extensionThreshold?: number
+}
+
+/**
  * Base error class for all RedLock-related errors.
  *
  * Provides context information including the operation type,

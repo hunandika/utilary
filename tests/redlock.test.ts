@@ -11,8 +11,6 @@ import {
   RedLockTimeoutError,
 } from '../src/types'
 
-
-
 describe('RedLock', () => {
   let redisClient: RedisClientType
   let redlock: RedLock
@@ -279,7 +277,7 @@ describe('RedLock', () => {
     it('should test retry delay and jitter calculation logic', async () => {
       if (skipIfNoRedis()) return
 
-      // Test the exact line 72-73: const delay = this.retryDelay + Math.floor(Math.random() * this.retryJitter)
+      // Test the exact const delay = this.retryDelay + Math.floor(Math.random() * this.retryJitter)
       const testRedlock = new RedLock(redisClient, {
         retryCount: 1,
         retryDelay: 200,
@@ -486,6 +484,178 @@ describe('RedLock', () => {
       const keyExists = await redisClient.exists('lock-timeout-test-key')
       expect(keyExists).toBe(0)
     })
+
+    it('should timeout with precise timing and proper error details', async () => {
+      if (skipIfNoRedis()) return
+
+      const slowFunction = vi.fn().mockImplementation(async () => {
+        // Function takes 2 seconds, but timeout is 800ms
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        return 'should-not-complete'
+      })
+
+      const startTime = Date.now()
+
+      try {
+        await redlock.lock('precise-timeout-test-key', 800, slowFunction)
+        expect.fail('Should have thrown timeout error')
+      } catch (error) {
+        const endTime = Date.now()
+        const duration = endTime - startTime
+
+        // Should timeout around 800ms, allow some tolerance
+        expect(duration).toBeGreaterThan(750)
+        expect(duration).toBeLessThan(1200)
+
+        // Error should be proper RedLockTimeoutError with correct message
+        expect(error).toBeInstanceOf(RedLockTimeoutError)
+        expect(error.message).toContain('Function timed out')
+        expect(error.message).toContain('800ms')
+      }
+
+      // Function should have been called but not completed
+      expect(slowFunction).toHaveBeenCalledTimes(1)
+
+      // Verify lock is cleaned up even after timeout
+      const keyExists = await redisClient.exists('precise-timeout-test-key')
+      expect(keyExists).toBe(0)
+    })
+
+    it('should not timeout if function completes within TTL', async () => {
+      if (skipIfNoRedis()) return
+
+      const fastFunction = vi.fn().mockImplementation(async () => {
+        // Function takes 300ms, TTL is 1000ms - should complete successfully
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return 'completed-successfully'
+      })
+
+      const startTime = Date.now()
+      const result = await redlock.lock('no-timeout-test-key', 1000, fastFunction)
+      const endTime = Date.now()
+
+      expect(result).toBe('completed-successfully')
+      expect(fastFunction).toHaveBeenCalledTimes(1)
+      expect(endTime - startTime).toBeLessThan(500) // Should complete quickly
+
+      // Verify lock is cleaned up
+      const keyExists = await redisClient.exists('no-timeout-test-key')
+      expect(keyExists).toBe(0)
+    })
+
+    it('should handle timeout with function that throws error before timeout', async () => {
+      if (skipIfNoRedis()) return
+
+      const errorFunction = vi.fn().mockImplementation(async () => {
+        // Function throws error after 200ms, but timeout is 1000ms
+        await new Promise(resolve => setTimeout(resolve, 200))
+        throw new Error('Function error before timeout')
+      })
+
+      const startTime = Date.now()
+
+      try {
+        await redlock.lock('error-before-timeout-key', 1000, errorFunction)
+        expect.fail('Should have thrown function error')
+      } catch (error) {
+        const endTime = Date.now()
+        const duration = endTime - startTime
+
+        // Should fail due to function error, not timeout
+        expect(duration).toBeLessThan(500) // Much less than timeout
+        expect(error.message).toBe('Function error before timeout')
+        expect(error).not.toBeInstanceOf(RedLockTimeoutError)
+      }
+
+      expect(errorFunction).toHaveBeenCalledTimes(1)
+
+      // Verify lock is cleaned up even when function throws
+      const keyExists = await redisClient.exists('error-before-timeout-key')
+      expect(keyExists).toBe(0)
+    })
+
+    it('should handle very short timeout periods', async () => {
+      if (skipIfNoRedis()) return
+
+      const shortDelayFunction = vi.fn().mockImplementation(async () => {
+        // Function takes 150ms, but timeout is only 50ms
+        await new Promise(resolve => setTimeout(resolve, 150))
+        return 'should-timeout'
+      })
+
+      const startTime = Date.now()
+
+      try {
+        await redlock.lock('short-timeout-key', 50, shortDelayFunction)
+        expect.fail('Should have thrown timeout error')
+      } catch (error) {
+        const endTime = Date.now()
+        const duration = endTime - startTime
+
+        // Should timeout quickly
+        expect(duration).toBeGreaterThan(40)
+        expect(duration).toBeLessThan(120)
+        expect(error).toBeInstanceOf(RedLockTimeoutError)
+      }
+
+      expect(shortDelayFunction).toHaveBeenCalledTimes(1)
+
+      // Verify lock is cleaned up
+      const keyExists = await redisClient.exists('short-timeout-key')
+      expect(keyExists).toBe(0)
+    })
+
+    it('should handle concurrent redlock.lock operations with timeout', async () => {
+      if (skipIfNoRedis()) return
+
+      const operation1 = vi.fn().mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        return 'op1-result'
+      })
+
+      const operation2 = vi.fn().mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 800)) // Should timeout
+        return 'op2-result'
+      })
+
+      const operation3 = vi.fn().mockImplementation(async () => {
+        await new Promise(resolve => setTimeout(resolve, 200))
+        return 'op3-result'
+      })
+
+      const promises = [
+        redlock.lock('concurrent-timeout-1', 500, operation1), // Should succeed
+        redlock.lock('concurrent-timeout-2', 600, operation2), // Should timeout
+        redlock.lock('concurrent-timeout-3', 400, operation3), // Should succeed
+      ]
+
+      const results = await Promise.allSettled(promises)
+
+      // Operation 1 should succeed
+      expect(results[0].status).toBe('fulfilled')
+      expect((results[0] as PromiseFulfilledResult<string>).value).toBe('op1-result')
+
+      // Operation 2 should timeout
+      expect(results[1].status).toBe('rejected')
+      expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(RedLockTimeoutError)
+
+      // Operation 3 should succeed
+      expect(results[2].status).toBe('fulfilled')
+      expect((results[2] as PromiseFulfilledResult<string>).value).toBe('op3-result')
+
+      // All operations should have been called
+      expect(operation1).toHaveBeenCalledTimes(1)
+      expect(operation2).toHaveBeenCalledTimes(1)
+      expect(operation3).toHaveBeenCalledTimes(1)
+
+      // All locks should be cleaned up
+      const key1Exists = await redisClient.exists('concurrent-timeout-1')
+      const key2Exists = await redisClient.exists('concurrent-timeout-2')
+      const key3Exists = await redisClient.exists('concurrent-timeout-3')
+      expect(key1Exists).toBe(0)
+      expect(key2Exists).toBe(0)
+      expect(key3Exists).toBe(0)
+    })
   })
 
   describe('autoExtendLock', () => {
@@ -687,16 +857,16 @@ describe('RedLock', () => {
         return 'extension-failure-test'
       })
 
-              // Override the testRedlock's extend method too
-        vi.spyOn(testRedlock, 'extend').mockImplementation(async () => {
-          extendCallCount++
-          if (extendCallCount <= 2) {
-            // First few extension calls fail - this triggers early return path
-            return false
-          }
-          // Later calls succeed to allow function to complete
-          return true
-        })
+      // Override the testRedlock's extend method too
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async () => {
+        extendCallCount++
+        if (extendCallCount <= 2) {
+          // First few extension calls fail - this triggers early return path
+          return false
+        }
+        // Later calls succeed to allow function to complete
+        return true
+      })
 
       const result = await testRedlock.autoExtendLock('extension-fail-test-key', 150, testFunction)
 
@@ -750,48 +920,48 @@ describe('RedLock', () => {
     it('should trigger automatic extension when approaching expiration threshold', async () => {
       if (skipIfNoRedis()) return
 
-      // Setup untuk memastikan timeLeft < automaticExtensionThreshold
+      // Setup to ensure timeLeft < automaticExtensionThreshold
       const testRedlock = new RedLock(redisClient, {
-        automaticExtensionThreshold: 800, // Set threshold tinggi
+        automaticExtensionThreshold: 800, // Set high threshold
         retryCount: 1,
       })
 
-      // Acquire lock dengan TTL pendek
+      // Acquire lock with short TTL
       const lock = await testRedlock.acquire('auto-extend-lines-test-key', 500)
       expect(lock).not.toBeNull()
 
       if (lock) {
         try {
-          // Manipulate lock.validUntil agar timeLeft < threshold
+          // Manipulate lock.validUntil so timeLeft < threshold
           lock.validUntil = Date.now() + 200 // Very short time left
 
-                      let extendCalled = false
+          let extendCalled = false
 
-                      // Spy on extend method to track execution
+          // Spy on extend method to track execution
           vi.spyOn(testRedlock, 'extend').mockImplementation(async () => {
             extendCalled = true
             return true // Return true for successful extension
           })
 
           // Call scheduleExtend manually to test threshold logic
-                                  const scheduleExtendMethod =
-              (testRedlock as any).scheduleExtend ||
-              (async (): Promise<void> => {
-                // Recreate scheduleExtend logic for testing
-                const timeLeft = lock.validUntil - Date.now()
-                if (timeLeft < testRedlock.automaticExtensionThreshold) {
-                  // Check if extension is needed
-                  const extended = await testRedlock.extend(lock, 500) // Attempt extension
-                  if (!extended) {
-                    // Early return if extension fails
-                    return
-                  }
+          const scheduleExtendMethod =
+            (testRedlock as any).scheduleExtend ||
+            (async (): Promise<void> => {
+              // Recreate scheduleExtend logic for testing
+              const timeLeft = lock.validUntil - Date.now()
+              if (timeLeft < testRedlock.automaticExtensionThreshold) {
+                // Check if extension is needed
+                const extended = await testRedlock.extend(lock, 500) // Attempt extension
+                if (!extended) {
+                  // Early return if extension fails
+                  return
                 }
-              })
+              }
+            })
 
-            await scheduleExtendMethod()
+          await scheduleExtendMethod()
 
-            expect(extendCalled).toBe(true) // Confirms extension was attempted
+          expect(extendCalled).toBe(true) // Confirms extension was attempted
         } finally {
           vi.restoreAllMocks()
           await redisClient.del('auto-extend-lines-test-key')
@@ -802,7 +972,7 @@ describe('RedLock', () => {
     it('should test real extend success with validUntil calculation', async () => {
       if (skipIfNoRedis()) return
 
-              // Use real Redis operation without mocks for comprehensive testing
+      // Use real Redis operation without mocks for comprehensive testing
       const testRedlock = new RedLock(redisClient, { driftFactor: 0.1 })
 
       // Acquire real lock first
@@ -836,42 +1006,42 @@ describe('RedLock', () => {
     it('should test real autoExtendLock with extension threshold triggering', async () => {
       if (skipIfNoRedis()) return
 
-              // Create redlock with high threshold to trigger extension
-        const testRedlock = new RedLock(redisClient, {
-          automaticExtensionThreshold: 800, // High threshold
-          retryCount: 1,
+      // Create redlock with high threshold to trigger extension
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 800, // High threshold
+        retryCount: 1,
+      })
+
+      let extensionHappened = false
+
+      // Spy to detect extension calls without overriding behavior
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionHappened = true
+        // Call original method for real Redis operation
+        return await originalExtend(lock, ttl)
+      })
+
+      try {
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Wait long enough to trigger extension logic
+          await new Promise(resolve => setTimeout(resolve, 600))
+          return 'autoextend-threshold-test'
         })
 
-        let extensionHappened = false
+        // Use TTL smaller than threshold to trigger extension
+        const result = await testRedlock.autoExtendLock(
+          'autoextend-threshold-test-key',
+          400, // TTL < automaticExtensionThreshold
+          testFunction
+        )
 
-        // Spy to detect extension calls without overriding behavior
-        const originalExtend = testRedlock.extend.bind(testRedlock)
-        vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
-          extensionHappened = true
-          // Call original method for real Redis operation
-          return await originalExtend(lock, ttl)
-        })
+        expect(result).toBe('autoextend-threshold-test')
+        expect(extensionHappened).toBe(true) // Confirms extension was triggered
 
-        try {
-          const testFunction = vi.fn().mockImplementation(async () => {
-            // Wait long enough to trigger extension logic
-            await new Promise(resolve => setTimeout(resolve, 600))
-            return 'autoextend-threshold-test'
-          })
-
-          // Use TTL smaller than threshold to trigger extension
-          const result = await testRedlock.autoExtendLock(
-            'autoextend-threshold-test-key',
-            400, // TTL < automaticExtensionThreshold
-            testFunction
-          )
-
-          expect(result).toBe('autoextend-threshold-test')
-          expect(extensionHappened).toBe(true) // Confirms extension was triggered
-
-                  // Verify lock is cleaned up
-          const keyExists = await redisClient.exists('autoextend-threshold-test-key')
-          expect(keyExists).toBe(0)
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('autoextend-threshold-test-key')
+        expect(keyExists).toBe(0)
       } finally {
         vi.restoreAllMocks()
       }
@@ -939,11 +1109,10 @@ describe('RedLock', () => {
           let extendCalled = false
           const originalExtend = testRedlock.extend.bind(testRedlock)
 
-                  // Spy tanpa override untuk track calls
-        vi.spyOn(testRedlock, 'extend')
-          .mockImplementation(async (lockParam, ttl) => {
+          // Spy without override to track calls
+          vi.spyOn(testRedlock, 'extend').mockImplementation(async (lockParam, ttl) => {
             extendCalled = true
-            // Call real extend untuk actual Redis operation
+            // Call real extend for actual Redis operation
             return await originalExtend(lockParam, ttl)
           })
 
@@ -952,10 +1121,8 @@ describe('RedLock', () => {
             const timeLeft = lock.validUntil - Date.now()
 
             if (timeLeft < testRedlock.automaticExtensionThreshold) {
-              // Line 117
-              const extended = await testRedlock.extend(lock, 1000) // Line 118
+              const extended = await testRedlock.extend(lock, 1000)
               if (!extended) {
-                // Line 119
                 return
               }
             }
@@ -964,7 +1131,7 @@ describe('RedLock', () => {
           // Execute manual scheduleExtend
           await manualScheduleExtend()
 
-                      expect(extendCalled).toBe(true) // Confirms extension threshold logic was executed
+          expect(extendCalled).toBe(true) // Confirms extension threshold logic was executed
         } finally {
           vi.restoreAllMocks()
           await testRedlock.release(lock)
@@ -1063,7 +1230,11 @@ describe('RedLock', () => {
       vi.spyOn(errorRedlock, 'extend').mockImplementation(async () => {
         // Simulate Redis error by calling handleError directly
         const error = new Error('Redis eval error for extend')
-        const redlockError = (errorRedlock as any).createError(error, RedLockExtendError, 'test-key')
+        const redlockError = (errorRedlock as any).createError(
+          error,
+          RedLockExtendError,
+          'test-key'
+        )
         ;(errorRedlock as any).handleError(redlockError)
         return false
       })
@@ -1081,6 +1252,348 @@ describe('RedLock', () => {
           vi.restoreAllMocks()
           await errorRedlock.release(lock)
         }
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should respect maxExtensions limit and stop extending', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 300, // High threshold to trigger extensions
+        retryCount: 1,
+      })
+
+      let extensionCount = 0
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+
+      // Spy on extend to count actual extensions
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionCount++
+        return await originalExtend(lock, ttl)
+      })
+
+      try {
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Wait long enough to trigger multiple extension attempts
+          await new Promise(resolve => setTimeout(resolve, 1500))
+          return 'max-extensions-test'
+        })
+
+        // Set maxExtensions to 2
+        const result = await testRedlock.autoExtendLock(
+          'max-extensions-test-key',
+          400, // Short TTL to trigger extensions
+          testFunction,
+          { maxExtensions: 2 }
+        )
+
+        expect(result).toBe('max-extensions-test')
+        expect(extensionCount).toBeLessThanOrEqual(2) // Should not exceed maxExtensions
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('max-extensions-test-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should allow unlimited extensions when maxExtensions is -1', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 200,
+        retryCount: 1,
+      })
+
+      let extensionCount = 0
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionCount++
+        return await originalExtend(lock, ttl)
+      })
+
+      try {
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Wait long enough to trigger multiple extensions
+          await new Promise(resolve => setTimeout(resolve, 1200))
+          return 'unlimited-extensions-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'unlimited-extensions-test-key',
+          300,
+          testFunction,
+          { maxExtensions: -1 } // -1 means unlimited
+        )
+
+        expect(result).toBe('unlimited-extensions-test')
+        expect(extensionCount).toBeGreaterThan(0) // Should have extended at least once
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('unlimited-extensions-test-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should use custom extensionThreshold when provided', async () => {
+      if (skipIfNoRedis()) return
+
+      const customThreshold = 1000
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 200, // Default threshold
+        retryCount: 1,
+      })
+
+      let firstExtensionTime = 0
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        if (firstExtensionTime === 0) {
+          firstExtensionTime = Date.now()
+        }
+        return await originalExtend(lock, ttl)
+      })
+
+      try {
+        const startTime = Date.now()
+        const testFunction = vi.fn().mockImplementation(async () => {
+          await new Promise(resolve => setTimeout(resolve, 800))
+          return 'custom-threshold-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'custom-threshold-test-key',
+          1500, // TTL of 1500ms
+          testFunction,
+          {
+            extensionThreshold: customThreshold, // Should extend when 1000ms left
+            maxExtensions: 1,
+          }
+        )
+
+        expect(result).toBe('custom-threshold-test')
+
+        if (firstExtensionTime > 0) {
+          // Extension should happen roughly when TTL - customThreshold time has passed
+          const extensionDelay = firstExtensionTime - startTime
+          expect(extensionDelay).toBeLessThan(700) // Should extend early due to high threshold
+        }
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('custom-threshold-test-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should handle zero maxExtensions correctly', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 100,
+        retryCount: 1,
+      })
+
+      let extensionCount = 0
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async () => {
+        extensionCount++
+        return true
+      })
+
+      try {
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Quick operation that should complete before any extension
+          await new Promise(resolve => setTimeout(resolve, 50))
+          return 'zero-extensions-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'zero-extensions-test-key',
+          200,
+          testFunction,
+          { maxExtensions: 0 } // No extensions allowed
+        )
+
+        expect(result).toBe('zero-extensions-test')
+        expect(extensionCount).toBe(0) // Should not extend at all
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('zero-extensions-test-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should handle function that runs longer than maxExtensions can cover', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 200, // Trigger extension when 200ms left
+        retryCount: 1,
+      })
+
+      let extensionCount = 0
+      let extensionAttempts = 0
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionAttempts++
+
+        // Only allow first 2 extensions to succeed (within maxExtensions limit)
+        if (extensionCount < 2) {
+          extensionCount++
+          return await originalExtend(lock, ttl)
+        }
+
+        // Beyond maxExtensions - should not be called due to limit check
+        return false
+      })
+
+      try {
+        let functionCompleted = false
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Function runs for 2 seconds, but with 400ms TTL + 2 extensions (800ms each)
+          // Total coverage: 400 + 800 + 800 = 2000ms - exactly matches function duration
+          // This tests the edge case where extensions are exhausted right as function completes
+          await new Promise(resolve => setTimeout(resolve, 1800))
+          functionCompleted = true
+          return 'long-running-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'long-running-maxext-key',
+          400, // Initial TTL: 400ms
+          testFunction,
+          { maxExtensions: 2 } // Allow exactly 2 extensions
+        )
+
+        expect(result).toBe('long-running-test')
+        expect(functionCompleted).toBe(true)
+        expect(extensionCount).toBe(2) // Should have used exactly 2 extensions
+        expect(extensionAttempts).toBe(2) // Should not attempt more than maxExtensions
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('long-running-maxext-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should allow function to complete even when extensions are exhausted', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 150, // Trigger extension when 150ms left
+        retryCount: 1,
+      })
+
+      let extensionCount = 0
+      let stopExtendingCalled = false
+      const originalExtend = testRedlock.extend.bind(testRedlock)
+
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionCount++
+        if (extensionCount <= 1) {
+          // First extension succeeds
+          return await originalExtend(lock, ttl)
+        } else {
+          // Beyond maxExtensions - this shouldn't be called due to our limit check
+          stopExtendingCalled = true
+          return false
+        }
+      })
+
+      try {
+        let functionStartTime = 0
+        let functionEndTime = 0
+        const testFunction = vi.fn().mockImplementation(async () => {
+          functionStartTime = Date.now()
+
+          // Function runs for 1.5 seconds
+          // With 300ms initial TTL + 1 extension (300ms), total coverage is ~600ms
+          // Function runs longer than what extensions can cover
+          await new Promise(resolve => setTimeout(resolve, 1500))
+
+          functionEndTime = Date.now()
+          return 'exhausted-extensions-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'exhausted-ext-key',
+          300, // Initial TTL: 300ms
+          testFunction,
+          { maxExtensions: 1 } // Allow only 1 extension
+        )
+
+        expect(result).toBe('exhausted-extensions-test')
+        expect(extensionCount).toBe(1) // Should have used exactly 1 extension
+        expect(stopExtendingCalled).toBe(false) // Should not attempt beyond maxExtensions
+        expect(functionEndTime - functionStartTime).toBeGreaterThan(1400) // Function actually ran full duration
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('exhausted-ext-key')
+        expect(keyExists).toBe(0)
+      } finally {
+        vi.restoreAllMocks()
+      }
+    })
+
+    it('should prevent extension attempts after maxExtensions reached', async () => {
+      if (skipIfNoRedis()) return
+
+      const testRedlock = new RedLock(redisClient, {
+        automaticExtensionThreshold: 100, // Very low threshold to trigger extensions quickly
+        retryCount: 1,
+      })
+
+      let extensionCallCount = 0
+      let extensionAttemptTimes: number[] = []
+
+      vi.spyOn(testRedlock, 'extend').mockImplementation(async (lock, ttl) => {
+        extensionCallCount++
+        extensionAttemptTimes.push(Date.now())
+
+        // Simulate successful extensions
+        lock.validUntil = Date.now() + ttl - Math.floor(ttl * 0.01) - 2
+        return true
+      })
+
+      try {
+        const startTime = Date.now()
+        const testFunction = vi.fn().mockImplementation(async () => {
+          // Wait long enough that multiple extension attempts would occur without maxExtensions limit
+          await new Promise(resolve => setTimeout(resolve, 800))
+          return 'prevention-test'
+        })
+
+        const result = await testRedlock.autoExtendLock(
+          'prevent-ext-key',
+          200, // Initial TTL: 200ms
+          testFunction,
+          { maxExtensions: 2 } // Strict limit of 2 extensions
+        )
+
+        expect(result).toBe('prevention-test')
+        expect(extensionCallCount).toBe(2) // Should call extend exactly 2 times, no more
+
+        // Verify extensions happened at reasonable intervals
+        if (extensionAttemptTimes.length >= 2) {
+          const timeBetweenExtensions = extensionAttemptTimes[1] - extensionAttemptTimes[0]
+          expect(timeBetweenExtensions).toBeGreaterThan(80) // Should have reasonable gap between extensions
+        }
+
+        // Verify lock is cleaned up
+        const keyExists = await redisClient.exists('prevent-ext-key')
+        expect(keyExists).toBe(0)
       } finally {
         vi.restoreAllMocks()
       }
@@ -1429,37 +1942,27 @@ describe('RedLock', () => {
       expect(lock).not.toBeNull()
 
       if (lock) {
-        try {
-                    // Mock client.eval to throw an error to trigger error handling path
-          const originalEval = redisClient.eval
-          redisClient.eval = vi.fn().mockRejectedValue(new Error('Redis eval error in release'))
+        // Mock client.eval to throw an error to trigger error handling path
+        const originalEval = redisClient.eval
+        redisClient.eval = vi.fn().mockRejectedValue(new Error('Redis eval error in release'))
 
-          // Call release - should trigger catch block and error handling
-          const result = await errorRedlock.release(lock)
+        // Call release - should trigger catch block and error handling
+        const result = await errorRedlock.release(lock)
 
-          // Should return false due to error
-          expect(result).toBe(false)
+        // Should return false due to error
+        expect(result).toBe(false)
 
-          // Should call error handler with proper error type
-          expect(onError).toHaveBeenCalledWith(expect.any(RedLockReleaseError))
-          expect(onError).toHaveBeenCalledWith(
-            expect.objectContaining({
-              message: expect.stringContaining('Redis eval error in release'),
-              key: 'release-eval-error-test-key'
-            })
-          )
+        // Should call error handler with proper error type
+        expect(onError).toHaveBeenCalledWith(expect.any(RedLockReleaseError))
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining('Redis eval error in release'),
+            key: 'release-eval-error-test-key',
+          })
+        )
 
-          // Restore original eval
-          redisClient.eval = originalEval
-        } finally {
-          // Manual cleanup using original eval
-          const originalEval = redisClient.eval
-          if (redisClient.eval !== originalEval) {
-            redisClient.eval = originalEval
-          }
-          // Try to cleanup the key
-          await redisClient.del('release-eval-error-test-key').catch(() => {})
-        }
+        // Restore original eval
+        redisClient.eval = originalEval
       }
     })
 
@@ -1475,8 +1978,8 @@ describe('RedLock', () => {
       expect(lock).not.toBeNull()
 
       if (lock) {
-                try {
-                    // Mock client.eval to throw an error to trigger error handling path
+        try {
+          // Mock client.eval to throw an error to trigger error handling path
           const originalEval = redisClient.eval
           redisClient.eval = vi.fn().mockRejectedValue(new Error('Redis eval error in extend'))
 
@@ -1491,7 +1994,7 @@ describe('RedLock', () => {
           expect(onError).toHaveBeenCalledWith(
             expect.objectContaining({
               message: expect.stringContaining('Redis eval error in extend'),
-              key: 'extend-eval-error-test-key'
+              key: 'extend-eval-error-test-key',
             })
           )
 
@@ -1521,10 +2024,10 @@ describe('RedLock', () => {
       // Force client to be in disconnected state temporarily
       const originalEval = redisClient.eval
 
-              // Mock eval to simulate network error
-        redisClient.eval = vi.fn().mockImplementation(() => {
-          throw new Error('Connection lost to Redis server')
-        }) as any
+      // Mock eval to simulate network error
+      redisClient.eval = vi.fn().mockImplementation(() => {
+        throw new Error('Connection lost to Redis server')
+      }) as any
 
       try {
         // Test release error path
@@ -1539,7 +2042,6 @@ describe('RedLock', () => {
         const extendResult = await errorRedlock.extend(lock, 3000)
         expect(extendResult).toBe(false)
         expect(onError).toHaveBeenCalledWith(expect.any(RedLockExtendError))
-
       } finally {
         // Restore original eval method
         redisClient.eval = originalEval
