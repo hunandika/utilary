@@ -1,6 +1,6 @@
 {
   "name": "utilary",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "A comprehensive TypeScript utility library featuring Redis distributed locking and more. Designed for scalable applications requiring reliable concurrency control and data management utilities.",
   "main": "dist/index.js",
   "module": "dist/index.js",
