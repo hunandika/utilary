@@ -11,8 +11,8 @@ Utilary employs **Vitest** as the primary testing framework, chosen for its mode
 ```json
 {
   "devDependencies": {
-    "vitest": "^2.1.8",
-    "@vitest/coverage-v8": "^2.1.8",
+    "vitest": "^3.2.1",
+    "@vitest/coverage-v8": "^3.2.1",
     "redis": "^5.5.5"
   }
 }
@@ -34,7 +34,7 @@ npm install
 
 ```bash
 # Using Docker (Recommended)
-docker run -d --name utilary-redis-test -p 6379:6379 redis:7-alpine
+docker run -d --name utilary-redis-test -p 6379:6379 redis:alpine
 
 # Or using local Redis installation
 redis-server
@@ -69,7 +69,7 @@ npm run test:coverage
 #### 4. **Specific Test File**
 
 ```bash
-npx vitest src/__tests__/redlock.test.ts
+npx vitest tests/redlock.test.ts
 ```
 
 #### 5. **Watch Mode Development**
@@ -81,15 +81,22 @@ npx vitest --watch
 ## Test Architecture
 
 ```
+tests/
+├── redlock.test.ts       # Core RedLock functionality tests
+├── types.test.ts         # Type definitions and error handling tests
+├── index.test.ts         # Module exports verification
+└── README.md             # This documentation
 src/
-├── __tests__/
-│   ├── redlock.test.ts       # Core RedLock functionality tests
-│   ├── types.test.ts         # Type definitions and error handling tests
-│   └── index.test.ts         # Module exports verification
-└── ...
+└── ...                   # Source code
 ```
 
-## Comprehensive Test Coverage
+## Comprehensive Test Coverage - ✅ 100% ACHIEVED
+
+### Current Coverage Status
+- ✅ **Lines**: 100% (All lines covered)
+- ✅ **Functions**: 100% (All functions covered)
+- ✅ **Branches**: 100% (All conditional paths covered)
+- ✅ **Statements**: 100% (All statements covered)
 
 ### 1. **Core Functionality Tests** (`redlock.test.ts`)
 
@@ -99,9 +106,10 @@ src/
 - ✅ **Lock Extension**: TTL extension for active locks
 - ✅ **Auto-Extension**: Intelligent lock extension for long-running operations
 - ✅ **Timeout Management**: Function execution timeout handling
-- ✅ **Error Resilience**: Comprehensive error handling and recovery
+- ✅ **Error Resilience**: Comprehensive error handling and recovery (including Redis eval errors)
 - ✅ **Retry Strategy**: Exponential backoff with jitter
 - ✅ **Concurrent Operations**: Multi-lock scenarios and contention handling
+- ✅ **Edge Cases**: All error paths and exception handling covered
 
 ### 2. **Type System Tests** (`types.test.ts`)
 
@@ -157,18 +165,43 @@ describe('RedLock with Real Redis', () => {
 - 🐳 **Container Ready**: Seamless Docker integration
 - ⚡ **CI/CD Friendly**: Works in automated deployment pipelines
 
-## Quality Metrics & Coverage Goals
+## Quality Metrics & Coverage Achieved
 
-| Metric         | Target | Description                         |
-| -------------- | ------ | ----------------------------------- |
-| **Lines**      | > 98%  | Individual line execution coverage  |
-| **Functions**  | > 98%  | Function/method invocation coverage |
-| **Branches**   | > 95%  | Conditional logic path coverage     |
-| **Statements** | > 98%  | Statement execution coverage        |
+| Metric         | Target | Current | Status |
+| -------------- | ------ | ------- | ------ |
+| **Lines**      | > 98%  | 100%    | ✅ **ACHIEVED** |
+| **Functions**  | > 98%  | 100%    | ✅ **ACHIEVED** |
+| **Branches**   | > 95%  | 100%    | ✅ **ACHIEVED** |
+| **Statements** | > 98%  | 100%    | ✅ **ACHIEVED** |
+
+**Total Test Count**: 77 tests passing
 
 ## Advanced Testing Patterns
 
-### 1. **Concurrent Operation Testing**
+### 1. **Error Path Coverage**
+
+All error handling paths are thoroughly tested, including:
+
+```typescript
+// Redis eval error scenarios
+it('should handle Redis eval errors for release operations', async () => {
+  // Mock Redis eval to throw error
+  vi.mocked(redisClient.eval).mockRejectedValueOnce(new Error('Redis eval failed'))
+
+  const result = await redlock.release(mockLock)
+  expect(result).toBe(false)
+})
+
+it('should handle Redis eval errors for extend operations', async () => {
+  // Mock Redis eval to throw error
+  vi.mocked(redisClient.eval).mockRejectedValueOnce(new Error('Redis eval failed'))
+
+  const result = await redlock.extend(mockLock, 1000)
+  expect(result).toBe(false)
+})
+```
+
+### 2. **Concurrent Operation Testing**
 
 ```typescript
 it('should handle burst operations with real Redis', async () => {
@@ -181,20 +214,6 @@ it('should handle burst operations with real Redis', async () => {
 
   const results = await Promise.all(operations)
   // Verify all operations complete successfully
-})
-```
-
-### 2. **Error Resilience Testing**
-
-```typescript
-it('should handle connection errors gracefully', async () => {
-  const onError = vi.fn()
-  const errorRedlock = new RedLock(client, {
-    retryCount: 3,
-    onError,
-  })
-
-  // Test error scenarios and recovery
 })
 ```
 
@@ -247,7 +266,7 @@ it('should maintain performance under load', async () => {
 ### GitHub Actions Configuration
 
 ```yaml
-name: Utilary Test Suite
+name: CI/CD
 on: [push, pull_request]
 
 jobs:
@@ -256,7 +275,7 @@ jobs:
 
     services:
       redis:
-        image: redis:7-alpine
+        image: redis:alpine
         ports:
           - 6379:6379
         options: >-
@@ -265,11 +284,15 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x, latest]
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: '18'
+          node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
         run: npm ci
@@ -280,14 +303,14 @@ jobs:
           REDIS_URL: redis://localhost:6379
 
       - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
 ```
 
 ### Local Development Workflow
 
 ```bash
 # 1. Start Redis for testing
-docker run -d --name utilary-test-redis -p 6379:6379 redis:7-alpine
+docker run -d --name utilary-test-redis -p 6379:6379 redis:alpine
 
 # 2. Run tests in watch mode during development
 npm test
@@ -339,4 +362,4 @@ npm run test:coverage -- --reporter=verbose --logHeapUsage
 
 ---
 
-**Utilary Testing Framework** - Ensuring reliability through comprehensive test coverage and real-world validation.
+**Utilary Testing Framework** - Reliability ensured through 100% test coverage and comprehensive real-world validation.

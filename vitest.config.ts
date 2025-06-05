@@ -14,7 +14,7 @@ export default defineConfig({
         '**/*.d.ts',
         'vitest.config.ts',
         'eslint.config.mjs',
-        'src/__tests__',
+        'tests/README.md',
       ],
     },
     testTimeout: 10000,

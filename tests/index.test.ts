@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from 'vitest'
 
 describe('Index Exports', () => {
   it('should export all types correctly', async () => {
-    const module = await import('../index')
+    const module = await import('../src/index')
 
     // Test named exports
     expect(module.RedLock).toBeDefined()
@@ -18,7 +19,7 @@ describe('Index Exports', () => {
   })
 
   it('should export default RedLock class', async () => {
-    const module = await import('../index')
+    const module = await import('../src/index')
 
     // Test default export
     expect(module.default).toBeDefined()
@@ -27,7 +28,7 @@ describe('Index Exports', () => {
   })
 
   it('should allow creating RedLock instance from default export', async () => {
-    const module = await import('../index')
+    const module = await import('../src/index')
     const RedLock = module.default
 
     const mockClient = {
