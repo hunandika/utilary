@@ -50,11 +50,6 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run tests
-        run: npm run test:run
-        env:
-          REDIS_URL: redis://localhost:6379
-
-      - name: Run tests with coverage
         run: npm run test:coverage
         env:
           REDIS_URL: redis://localhost:6379
