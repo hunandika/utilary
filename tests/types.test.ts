@@ -5,7 +5,7 @@ import {
   RedLockReleaseError,
   RedLockExtendError,
   RedLockTimeoutError,
-} from '../types'
+} from '../src/types'
 
 describe('Error Types', () => {
   describe('RedLockError', () => {
