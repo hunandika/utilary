@@ -58,7 +58,6 @@ jobs:
           REDIS_URL: redis://localhost:6379
 
       - name: Upload coverage to Codecov
-        # if: github.ref == 'refs/heads/main'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -91,7 +90,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [test, build]
-    # if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - name: Checkout code

@@ -4,6 +4,7 @@
 [![codecov](https://codecov.io/gh/hunandika/utilary/graph/badge.svg?token=wnXFspz8uF)](https://codecov.io/gh/hunandika/utilary)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/5ed76402b02742268940210ee39b5a04)](https://app.codacy.com/gh/hunandika/utilary/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 [![CodeFactor](https://www.codefactor.io/repository/github/hunandika/utilary/badge?s=1a152b71a37c619f0ee1d6ffd0847cf40ac6e37c)](https://www.codefactor.io/repository/github/hunandika/utilary)
+[![Known Vulnerabilities](https://snyk.io/test/github/hunandika/utilary/badge.svg)](https://snyk.io/test/github/hunandika/utilary)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
 
 A comprehensive TypeScript utility library designed for scalable applications. Currently featuring robust Redis distributed locking functionality with plans for expanded data management utilities.
