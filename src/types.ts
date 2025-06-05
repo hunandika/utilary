@@ -8,6 +8,8 @@ export interface Lock {
   value: string
   /** Timestamp when the lock expires (milliseconds since epoch) */
   validUntil: number
+  /** Flag indicating whether the lock has been released */
+  isReleased?: boolean
 }
 
 /**
@@ -22,7 +24,7 @@ export interface RedLockOptions {
   retryJitter?: number
   /** Clock drift factor for lock validity calculations (default: 0.01) */
   driftFactor?: number
-  /** Threshold for automatic lock extension in milliseconds (default: 500) */
+  /** Threshold for automatic lock extension in milliseconds (default: 100) */
   automaticExtensionThreshold?: number
   /** Optional callback for handling lock operation errors */
   onError?: (error: RedLockError) => void

@@ -198,7 +198,7 @@ async function basicExample(): Promise<void> {
       retryDelay: 100,
       retryJitter: 50,
       driftFactor: 0.01,
-      automaticExtensionThreshold: 500,
+      automaticExtensionThreshold: 100,
       onError: error => {
         console.error('🚨 RedLock operation failed:', error.message)
       },
