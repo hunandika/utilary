@@ -1,7 +1,7 @@
 /**
  * Represents an active distributed lock with ownership information.
  */
-export type Lock = {
+export interface Lock {
   /** Unique identifier for the locked resource */
   key: string
   /** Unique value for lock ownership verification */
@@ -13,7 +13,7 @@ export type Lock = {
 /**
  * Configuration options for RedLock behavior and retry strategies.
  */
-export type RedLockOptions = {
+export interface RedLockOptions {
   /** Maximum number of retry attempts for lock acquisition (default: 10) */
   retryCount?: number
   /** Base delay between retry attempts in milliseconds (default: 200) */
@@ -31,7 +31,7 @@ export type RedLockOptions = {
 /**
  * Configuration options for auto-extending lock behavior.
  */
-export type AutoExtendLockOptions = {
+export interface AutoExtendLockOptions {
   /**
    * Maximum number of extensions allowed.
    * - `undefined` or omitted: unlimited extensions (default behavior)
