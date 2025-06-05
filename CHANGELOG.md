@@ -16,14 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 - **100% Test Coverage**: Lines, functions, branches, and statements all covered
-- **77 Test Cases**: Comprehensive test suite including error scenarios
+- **89 Test Cases**: Comprehensive test suite including error scenarios
 - **Real Redis Integration**: Tests against actual Redis instances
 
 ### 🔧 Updated
 - **Vitest**: Upgraded to `^3.2.1` for better performance
 - **ESLint**: Updated to `^9.0.0` with latest rules
 - **Dependencies**: Removed deprecated packages and fixed vulnerabilities
-- **CI/CD**: Updated GitHub Actions to latest versions (checkout@v5, setup-node@v5)
 - **Node.js**: Support for versions 20.x, 22.x, and latest
 
 ### 📁 Changed
